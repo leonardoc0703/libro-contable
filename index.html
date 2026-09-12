@@ -1173,13 +1173,6 @@ function renderNav(){
 }
 
 function switchSection(id){
-  if(state && activeSection === 'empresa' && id !== 'empresa'){
-    const missing = empresaMissingFields(state.empresa);
-    if(missing.length){
-      alert('No puedes salir de "Datos de la empresa" hasta completar: ' + missing.map(k => EMPRESA_REQUIRED_LABELS[k]).join(', '));
-      return;
-    }
-  }
   activeSection = id;
   document.querySelectorAll('.section').forEach(el => el.classList.remove('active'));
   const el = document.getElementById('section-' + id);
@@ -1561,7 +1554,7 @@ function renderEmpresa(){
       <p>Estructurado igual que el RUT de la DIAN, para que puedas cargarlo y revisarlo sección por sección. Los campos con * son obligatorios.</p>
     </div>
 
-    ${missing.length ? `<div class="diff-banner bad">✗ Faltan campos obligatorios: ${missing.map(k => EMPRESA_REQUIRED_LABELS[k]).join(', ')}. No podrás salir de esta sección hasta completarlos.</div>` : ''}
+    ${missing.length ? `<div class="diff-banner bad">✗ Faltan campos obligatorios: ${missing.map(k => EMPRESA_REQUIRED_LABELS[k]).join(', ')}. Complétalos cuando puedas para que otros informes funcionen correctamente.</div>` : ''}
 
     <div class="card">
       <h3>1. Identificación tributaria</h3>
@@ -2181,7 +2174,7 @@ function updateEmpresaBanner(){
   const missing = empresaMissingFields(state.empresa);
   let banner = section.querySelector('.diff-banner');
   if(missing.length){
-    const html = `✗ Faltan campos obligatorios: ${missing.map(k => EMPRESA_REQUIRED_LABELS[k]).join(', ')}. No podrás salir de esta sección hasta completarlos.`;
+    const html = `✗ Faltan campos obligatorios: ${missing.map(k => EMPRESA_REQUIRED_LABELS[k]).join(', ')}. Complétalos cuando puedas para que otros informes funcionen correctamente.`;
     if(banner){ banner.innerHTML = html; }
     else {
       banner = document.createElement('div');
