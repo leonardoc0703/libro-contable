@@ -834,6 +834,7 @@ const EMPRESA_DEFAULTS = {
     clientId: '',
     nombreArchivo: '',
     ultimaSincronizacion: '',
+    autoSync: false,
   },
 };
 
@@ -1106,6 +1107,20 @@ function scheduleSave(){
     catch(e){ console.error('Error al guardar', e); }
     setSaveStatus(false);
   }, 400);
+  scheduleDriveAutoSync();
+}
+
+let driveAutoSyncTimer = null;
+function scheduleDriveAutoSync(){
+  const c = state && state.empresa && state.empresa.driveConfig;
+  if(!c || !c.autoSync || !driveAccessToken) return;
+  clearTimeout(driveAutoSyncTimer);
+  driveAutoSyncTimer = setTimeout(() => {
+    driveSubirRespaldo().then(() => {
+      const el = document.getElementById('driveStatus');
+      if(el) el.textContent = `✓ Auto-sincronizado con Drive — ${new Date().toLocaleString('es-CO')}`;
+    }).catch(err => console.error('Auto-sincronización con Drive falló', err));
+  }, 20000);
 }
 
 function logAudit(action, detail){
@@ -2512,6 +2527,10 @@ function renderConfig(){
         <button class="btn btn-primary" id="btnDriveSubir">⬆️ Guardar copia en Drive ahora</button>
         <button class="btn" id="btnDriveRestaurar">⬇️ Restaurar desde Drive</button>
       </div>
+      <label style="display:flex; align-items:center; gap:8px; font-weight:600; cursor:pointer; margin-top:12px;">
+        <input type="checkbox" id="driveAutoSyncToggle" ${state.empresa.driveConfig.autoSync ? 'checked' : ''} style="width:auto;">
+        Auto-sincronizar (sube una copia sola a Drive ~20 segundos después de cada cambio, mientras tengas la app abierta y conectada)
+      </label>
       <div id="driveStatus" class="empty-note" style="margin-top:10px;">
         ${state.empresa.driveConfig.ultimaSincronizacion ? `Última sincronización: ${new Date(state.empresa.driveConfig.ultimaSincronizacion).toLocaleString('es-CO')}` : 'Todavía no has sincronizado esta empresa.'}
       </div>
@@ -2554,6 +2573,13 @@ function renderConfig(){
     status.textContent = 'Conectando con Google…';
     try{ await conectarGoogleDrive(); status.textContent = '✓ Conectado con Google. Ya puedes guardar o restaurar.'; }
     catch(err){ status.textContent = '✗ ' + err.message; }
+  });
+  document.getElementById('driveAutoSyncToggle').addEventListener('change', (e) => {
+    state.empresa.driveConfig.autoSync = e.target.checked;
+    scheduleSave();
+    if(e.target.checked && !driveAccessToken){
+      document.getElementById('driveStatus').textContent = 'Activado. Dale a "🔗 Conectar con Google" ahora, y en cada sesión que abras la app, para que la auto-sincronización funcione.';
+    }
   });
   document.getElementById('btnDriveSubir').addEventListener('click', async () => {
     const status = document.getElementById('driveStatus');
