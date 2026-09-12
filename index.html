@@ -1021,6 +1021,33 @@ function addUserToIndex(username, companyId, passwordHash, role){
   saveUserIndex(idx);
 }
 
+// Después de importar un respaldo (.json) o restaurar desde Drive, los usuarios que
+// venían dentro de ese respaldo no existen todavía en el índice global de acceso de
+// ESTE navegador/origen. Esta función los registra ahí, asociados a la empresa activa,
+// para que puedas volver a iniciar sesión con tu usuario y contraseña de siempre.
+function reconciliarUsuariosImportados(){
+  if(!Array.isArray(state.users) || !state.users.length || !activeCompanyId) return { agregados: 0, enConflicto: [] };
+  const idx = loadUserIndex();
+  let agregados = 0;
+  const enConflicto = [];
+  state.users.forEach(u => {
+    const existente = idx.find(x => x.username.toLowerCase() === u.username.toLowerCase());
+    if(existente && existente.companyId !== activeCompanyId){
+      enConflicto.push(u.username); // ese usuario ya pertenece a otra empresa en este navegador
+      return;
+    }
+    if(existente){
+      existente.passwordHash = u.passwordHash;
+      existente.role = u.role;
+    } else {
+      idx.push({ username: u.username, companyId: activeCompanyId, passwordHash: u.passwordHash, role: u.role });
+      agregados++;
+    }
+  });
+  saveUserIndex(idx);
+  return { agregados, enConflicto };
+}
+
 async function ensureDemoCompany(){
   if(companies.some(c => c.id === 'demo')) return;
   companies.push({ id: 'demo', nombre: (SEED_DATA.empresa && SEED_DATA.empresa.nombre) || 'Empresa demo' });
@@ -2550,12 +2577,16 @@ function renderConfig(){
     try{
       const json = await driveRestaurarRespaldo();
       state = normalizeState(json);
+      const resultado = reconciliarUsuariosImportados();
       scheduleSave();
       updateSidebarBrand();
       applyAccentColor();
       applyDarkMode();
       renderActiveSection();
-      alert('Datos restaurados desde Google Drive correctamente.');
+      let msg = 'Datos restaurados desde Google Drive correctamente.';
+      if(resultado.agregados > 0) msg += ` Se habilitaron ${resultado.agregados} usuario(s) para iniciar sesión desde este navegador.`;
+      if(resultado.enConflicto.length) msg += ` ⚠️ No se pudieron habilitar (ya existen en otra empresa aquí): ${resultado.enConflicto.join(', ')}.`;
+      alert(msg);
     } catch(err){ status.textContent = '✗ ' + err.message; }
   });
   document.getElementById('btnConfigLogout').addEventListener('click', () => {
@@ -5445,12 +5476,16 @@ function renderRespaldo(){
       catch(err){ alert('El archivo no es un respaldo válido.'); return; }
       if(!confirm('Esto reemplazará todos los datos actuales por los del archivo importado. ¿Continuar?')) return;
       state = normalizeState(parsed);
+      const resultado = reconciliarUsuariosImportados();
       scheduleSave();
       updateSidebarBrand();
       applyAccentColor();
       applyDarkMode();
       renderActiveSection();
-      alert('Respaldo importado correctamente.');
+      let msg = 'Respaldo importado correctamente.';
+      if(resultado.agregados > 0) msg += ` Se habilitaron ${resultado.agregados} usuario(s) de este respaldo para iniciar sesión desde este navegador.`;
+      if(resultado.enConflicto.length) msg += ` ⚠️ Estos usuarios ya existían en otra empresa de este navegador y no se pudieron habilitar: ${resultado.enConflicto.join(', ')}.`;
+      alert(msg);
     };
     reader.readAsText(file);
     e.target.value = '';
