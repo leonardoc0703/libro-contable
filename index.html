@@ -1148,6 +1148,7 @@ const SECTIONS = [
   { id: 'auditoria', label: 'Auditoría', group: 'Configuración' },
   { id: 'cierres', label: 'Cierre de períodos', group: 'Configuración' },
   { id: 'config', label: 'Preferencias', group: 'Configuración' },
+  { id: 'respaldo', label: 'Respaldo de datos', group: 'Configuración' },
   { id: 'asientos', label: 'Comprobantes / Asientos', group: 'Contabilidad' },
   { id: 'mayor', label: 'Balance de comprobación', group: 'Contabilidad' },
   { id: 'auxiliar', label: 'Libro auxiliar', group: 'Contabilidad' },
@@ -1164,7 +1165,6 @@ const SECTIONS = [
   { id: 'presupuesto', label: 'Presupuesto vs. real', group: 'Informes' },
   { id: 'flujo', label: 'Estado de flujos de efectivo', group: 'Informes' },
   { id: 'patrimonio', label: 'Estado de cambios en el patrimonio', group: 'Informes' },
-  { id: 'respaldo', label: 'Respaldo de datos', group: 'Configuración' },
 ];
 
 let activeSection = 'inicio';
@@ -2349,6 +2349,18 @@ async function driveFindFileId(nombreArchivo){
   return null;
 }
 
+// Lista TODOS los respaldos de esta app guardados en el Drive de la cuenta conectada,
+// sin importar con qué nombre de empresa se hayan subido — así "Restaurar" no depende
+// de adivinar el nombre exacto de archivo.
+async function driveListarRespaldos(){
+  if(!driveAccessToken) await conectarGoogleDrive();
+  const q = encodeURIComponent(`name contains 'libro-contable-' and name contains '.json' and trashed=false`);
+  const res = await driveFetch(`https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id,name,modifiedTime)&orderBy=modifiedTime desc&spaces=drive`);
+  if(!res.ok) throw new Error('No se pudo consultar tu Google Drive.');
+  const data = await res.json();
+  return data.files || [];
+}
+
 function nombreArchivoDrive(){
   const c = driveConfig();
   if(c.nombreArchivo) return c.nombreArchivo;
@@ -2381,15 +2393,24 @@ async function driveSubirRespaldo(){
   return true;
 }
 
-async function driveRestaurarRespaldo(){
-  if(!driveAccessToken) await conectarGoogleDrive();
-  const nombreArchivo = nombreArchivoDrive();
-  const fileId = await driveFindFileId(nombreArchivo);
-  if(!fileId) throw new Error(`No se encontró ningún archivo "${nombreArchivo}" en tu Google Drive.`);
+async function driveDescargarArchivoPorId(fileId){
   const res = await driveFetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`);
   if(!res.ok) throw new Error('No se pudo descargar el respaldo desde Drive.');
-  const json = await res.json();
-  return json;
+  return await res.json();
+}
+
+async function driveRestaurarRespaldo(){
+  if(!driveAccessToken) await conectarGoogleDrive();
+  const archivos = await driveListarRespaldos();
+  if(!archivos.length) throw new Error('No se encontró ningún respaldo de Libro Contable en tu Google Drive todavía. Primero debes "Guardar copia en Drive" desde el computador donde sí tienes tus datos reales.');
+  if(archivos.length === 1){
+    return await driveDescargarArchivoPorId(archivos[0].id);
+  }
+  const lista = archivos.map((a, i) => `${i + 1}. ${a.name} (última modificación: ${new Date(a.modifiedTime).toLocaleString('es-CO')})`).join('\n');
+  const eleccion = prompt(`Encontré ${archivos.length} respaldos en tu Drive. Escribe el número del que quieres restaurar:\n\n${lista}`, '1');
+  const idx = parseInt(eleccion, 10) - 1;
+  if(isNaN(idx) || idx < 0 || idx >= archivos.length) throw new Error('No se eligió un respaldo válido.');
+  return await driveDescargarArchivoPorId(archivos[idx].id);
 }
 
 /* ---------------------------------------------------------
