@@ -5598,8 +5598,19 @@ function exportToExcel(){
 function shouldUppercaseInput(el){ if(!el||!['INPUT','TEXTAREA','SELECT'].includes(el.tagName))return false; const t=(el.type||'').toLowerCase(); if(['email','password','date','number','file','color','range','checkbox','radio'].includes(t))return false; if(el.dataset.keepcase==='true')return false; return true; }
 document.addEventListener('input',e=>{if(shouldUppercaseInput(e.target)&&typeof e.target.value==='string'){const p=e.target.selectionStart; e.target.value=e.target.value.toUpperCase(); try{e.target.setSelectionRange(p,p);}catch(_){}}});
 function uppercaseBusinessState(s){
- const skip=new Set(['correo','email','passwordHash','dataUrl','logoDataUrl','firmaRepresentanteDataUrl','firmaContadorDataUrl','firmaRevisorDataUrl','rutText','_lastExtracted','emailConfig','emailHistory']);
- const walk=(obj,key='')=>{if(!obj||typeof obj!=='object')return;Object.keys(obj).forEach(k=>{const v=obj[k];if(typeof v==='string'&&!skip.has(k)&&!k.toLowerCase().includes('url'))obj[k]=v.toUpperCase();else if(v&&typeof v==='object')walk(v,k);});}; walk(s); return s;
+ const skipKeys = new Set(['correo','email','passwordHash','dataUrl','logoDataUrl','firmaRepresentanteDataUrl','firmaContadorDataUrl','firmaRevisorDataUrl','rutText','_lastExtracted']);
+ const skipSubtrees = new Set(['emailConfig','emailHistory','driveConfig']); // configuración técnica: nunca se toca
+ const walk=(obj)=>{
+   if(!obj||typeof obj!=='object')return;
+   Object.keys(obj).forEach(k=>{
+     if(skipSubtrees.has(k)) return; // no entrar aquí en absoluto, ni para leer ni para modificar
+     const v=obj[k];
+     if(typeof v==='string' && !skipKeys.has(k) && !k.toLowerCase().includes('url')) obj[k]=v.toUpperCase();
+     else if(v && typeof v==='object') walk(v);
+   });
+ };
+ walk(s);
+ return s;
 }
 
 /* ---------------------------------------------------------
