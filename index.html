@@ -674,6 +674,7 @@
   <div class="section" id="section-exogena"></div>
   <div class="section" id="section-esf"></div>
   <div class="section" id="section-er"></div>
+  <div class="section" id="section-facturacion"></div>
   <div class="section" id="section-consulta"></div>
   <div class="section" id="section-conciliacion"></div>
   <div class="section" id="section-calendario"></div>
@@ -947,6 +948,7 @@ function normalizeState(s){
   s.exogenaReglas = s.exogenaReglas.map(r=>({id:r.id||uid(),formato:r.formato||'1001',cuenta:String(r.cuenta||''),concepto:String(r.concepto||'5001'),activo:r.activo!==false}));
   if(!s.exogenaConfig) s.exogenaConfig = { anio: new Date().getFullYear(), umbral: 24 };
   if(!Array.isArray(s.exogenaAjustes)) s.exogenaAjustes = [];
+  if(!Array.isArray(s.documentosComerciales)) s.documentosComerciales = [];
   s.asientos.forEach(a => { if(typeof a.centroCosto === 'undefined') a.centroCosto = ''; if(typeof a.subCentroCosto==='undefined') a.subCentroCosto=''; if(typeof a.localizacion==='undefined') a.localizacion=''; });
   if(!s.settings) s.settings = {};
   if(!s.settings.accentColor) s.settings.accentColor = '#7A2E3D';
@@ -1157,6 +1159,7 @@ const SECTIONS = [
   { id: 'inventarios', label: 'Inventarios / Costeo', group: 'Contabilidad' },
   { id: 'nomina', label: 'Nómina', group: 'Contabilidad' },
   { id: 'exogena', label: 'Información exógena DIAN', group: 'Impuestos / Reportes' },
+  { id: 'facturacion', label: 'Facturas / Cotizaciones', group: 'Contabilidad' },
   { id: 'consulta', label: 'Consulta por fechas', group: 'Contabilidad' },
   { id: 'conciliacion', label: 'Conciliación bancaria', group: 'Contabilidad' },
   { id: 'calendario', label: 'Calendario tributario', group: 'Contabilidad' },
@@ -1328,6 +1331,23 @@ function computeESF(filters){
   };
 }
 
+// Indicadores financieros básicos (aproximados: activo/pasivo "corriente" se estima
+// por las clases del PUC que típicamente son de corto plazo — 11 a 14 para activo,
+// 21 a 25 para pasivo — ya que el PUC no distingue formalmente corto/largo plazo).
+function computeIndicadores(esf, er){
+  const esCorrienteActivo = c => ['11','12','13','14'].some(p => c.startsWith(p));
+  const esCorrientePasivo = c => ['21','22','23','24','25'].some(p => c.startsWith(p));
+  const activoCorriente = esf.activo.filter(a => esCorrienteActivo(a.code)).reduce((s,a) => s + (a.debito - a.credito), 0);
+  const pasivoCorriente = esf.pasivo.filter(a => esCorrientePasivo(a.code)).reduce((s,a) => s + (a.credito - a.debito), 0);
+
+  const razonCorriente = pasivoCorriente > 0 ? activoCorriente / pasivoCorriente : null;
+  const endeudamiento = esf.totalActivo > 0 ? esf.totalPasivo / esf.totalActivo : null;
+  const margenNeto = er.totalIngresos > 0 ? er.utilidadNeta / er.totalIngresos : null;
+  const roe = esf.totalPatrimonio > 0 ? er.utilidadNeta / esf.totalPatrimonio : null;
+
+  return { razonCorriente, endeudamiento, margenNeto, roe, activoCorriente, pasivoCorriente };
+}
+
 function groupByClass(accounts){
   const groups = {};
   accounts.forEach(a => {
@@ -1345,18 +1365,42 @@ const SECTION_RENDERERS = {};
 --------------------------------------------------------- */
 let dashActivoChart = null, dashERChart = null;
 
+let avisoSyncMostrado = false;
+
 function renderInicio(){
   const el = document.getElementById('section-inicio');
   const esf = computeESF();
   const er = computeER();
   const gt = globalTotals();
+  const ind = computeIndicadores(esf, er);
   const diasResp = diasDesdeUltimoRespaldo();
+  const mostrarAvisoSync = !avisoSyncMostrado && state.empresa.driveConfig && state.empresa.driveConfig.clientId;
+  if(mostrarAvisoSync) avisoSyncMostrado = true;
 
   el.innerHTML = `
     <div class="section-head">
       <h1>${escapeAttr(state.empresa.nombre || 'Tu empresa')}</h1>
       <p>NIT ${escapeAttr(state.empresa.nit || '')} · ${escapeAttr(state.empresa.ciudad || '')}</p>
     </div>
+
+    <div class="card" style="margin-bottom:18px;">
+      <div class="btn-row" style="flex-wrap:nowrap;">
+        <input type="text" id="buscadorGlobal" placeholder="Buscar terceros, cuentas, comprobantes, secciones…" style="flex:1; padding:10px 12px; border:1px solid var(--rule); border-radius:4px; background:var(--paper); color:var(--ink); font-family:'IBM Plex Sans',sans-serif; font-size:0.88rem;">
+        <button class="btn btn-primary" id="btnBuscarApp">🔍 Buscar aquí</button>
+        <button class="btn" id="btnBuscarInternet">🌐 Buscar en internet</button>
+      </div>
+      <p class="empty-note" style="margin-top:6px;">"Buscar aquí" busca dentro de tus propios datos (no envía nada a internet). "Buscar en internet" abre una búsqueda real de Google con lo que escribas, en una pestaña nueva.</p>
+      <div id="resultadosBusquedaGlobal"></div>
+    </div>
+
+    ${mostrarAvisoSync ? `
+    <div class="diff-banner ok" style="display:flex; justify-content:space-between; align-items:center; gap:10px;" id="avisoSyncBanner">
+      <span>💡 ¿Es este un computador distinto al que usaste la última vez? Si es así, restaura primero desde Drive para no perder cambios recientes.</span>
+      <div style="display:flex; gap:8px;">
+        <button class="btn btn-sm" id="btnAvisoSyncIr">Ir a Preferencias</button>
+        <button class="btn btn-sm" id="btnAvisoSyncCerrar">Ya lo hice</button>
+      </div>
+    </div>` : ''}
 
     ${diasResp >= 7 ? `
     <div class="diff-banner bad" style="display:flex; justify-content:space-between; align-items:center; gap:10px;">
@@ -1382,6 +1426,29 @@ function renderInicio(){
       <div class="stat-box">
         <div class="label">Líneas de asientos</div>
         <div class="value">${state.asientos.length}</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>Indicadores financieros (aproximados)</h3>
+      <p class="empty-note" style="margin-top:-6px; margin-bottom:10px;">Calculados automáticamente con lo que llevas registrado. La liquidez y el endeudamiento estiman "corriente" según las clases 11-14 (activo) y 21-25 (pasivo) del PUC — no es una clasificación contable formal de corto/largo plazo.</p>
+      <div class="stat-grid">
+        <div class="stat-box">
+          <div class="label">Razón corriente (liquidez)</div>
+          <div class="value ${ind.razonCorriente === null ? '' : (ind.razonCorriente < 1 ? 'bad' : 'good')}">${ind.razonCorriente === null ? 'N/A' : ind.razonCorriente.toFixed(2)}</div>
+        </div>
+        <div class="stat-box">
+          <div class="label">Endeudamiento</div>
+          <div class="value ${ind.endeudamiento === null ? '' : (ind.endeudamiento > 0.7 ? 'bad' : 'good')}">${ind.endeudamiento === null ? 'N/A' : (ind.endeudamiento * 100).toFixed(1) + '%'}</div>
+        </div>
+        <div class="stat-box">
+          <div class="label">Margen neto</div>
+          <div class="value ${ind.margenNeto === null ? '' : (ind.margenNeto < 0 ? 'bad' : 'good')}">${ind.margenNeto === null ? 'N/A' : (ind.margenNeto * 100).toFixed(1) + '%'}</div>
+        </div>
+        <div class="stat-box">
+          <div class="label">Rentabilidad del patrimonio (ROE)</div>
+          <div class="value ${ind.roe === null ? '' : (ind.roe < 0 ? 'bad' : 'good')}">${ind.roe === null ? 'N/A' : (ind.roe * 100).toFixed(1) + '%'}</div>
+        </div>
       </div>
     </div>
 
@@ -1411,12 +1478,90 @@ function renderInicio(){
   renderQuickLinks();
   const btnIrRespaldo = document.getElementById('btnIrRespaldo');
   if(btnIrRespaldo) btnIrRespaldo.addEventListener('click', () => switchSection('respaldo'));
+  const btnAvisoSyncIr = document.getElementById('btnAvisoSyncIr');
+  if(btnAvisoSyncIr) btnAvisoSyncIr.addEventListener('click', () => switchSection('config'));
+  const btnAvisoSyncCerrar = document.getElementById('btnAvisoSyncCerrar');
+  if(btnAvisoSyncCerrar) btnAvisoSyncCerrar.addEventListener('click', () => {
+    const b = document.getElementById('avisoSyncBanner');
+    if(b) b.remove();
+  });
+
+  const inputBusqueda = document.getElementById('buscadorGlobal');
+  document.getElementById('btnBuscarApp').addEventListener('click', () => renderResultadosBusquedaGlobal(inputBusqueda.value));
+  document.getElementById('btnBuscarInternet').addEventListener('click', () => buscarEnInternet(inputBusqueda.value));
+  inputBusqueda.addEventListener('keydown', (e) => {
+    if(e.key === 'Enter') renderResultadosBusquedaGlobal(inputBusqueda.value);
+  });
+}
+
+function buscarEnInternet(query){
+  if(!query || !query.trim()){ alert('Escribe algo para buscar.'); return; }
+  window.open(`https://www.google.com/search?q=${encodeURIComponent(query.trim())}`, '_blank');
+}
+
+function buscarEnLaApp(query){
+  const q = query.trim().toLowerCase();
+  if(!q) return [];
+  const resultados = [];
+
+  SECTIONS.forEach(s => {
+    if(s.label.toLowerCase().includes(q)) resultados.push({ tipo: 'Sección', texto: s.label, ir: () => switchSection(s.id) });
+  });
+  state.puc.forEach(a => {
+    if(a.code.toLowerCase().includes(q) || a.desc.toLowerCase().includes(q)){
+      resultados.push({ tipo: 'Cuenta PUC', texto: `${a.code} — ${a.desc}`, ir: () => switchSection('puc') });
+    }
+  });
+  state.terceros.forEach(t => {
+    if(t.nit.toLowerCase().includes(q) || t.nombre.toLowerCase().includes(q)){
+      resultados.push({ tipo: 'Tercero', texto: `${t.nit} — ${t.nombre}`, ir: () => switchSection('terceros') });
+    }
+  });
+  state.asientos.forEach(a => {
+    if((a.descripcion||'').toLowerCase().includes(q) || (a.detalle||'').toLowerCase().includes(q) || (a.cuenta||'').toLowerCase().includes(q)){
+      resultados.push({ tipo: 'Comprobante', texto: `${a.prefijo}-${a.numero} — ${a.descripcion || a.detalle}`, ir: () => switchSection('asientos') });
+    }
+  });
+  (state.documentosComerciales || []).forEach(d => {
+    if(String(d.numero).includes(q) || getTerceroNombre(d.nit).toLowerCase().includes(q)){
+      resultados.push({ tipo: d.tipo === 'factura' ? 'Factura' : 'Cotización', texto: `N° ${d.numero} — ${getTerceroNombre(d.nit)}`, ir: () => switchSection('facturacion') });
+    }
+  });
+
+  return resultados.slice(0, 25);
+}
+
+function renderResultadosBusquedaGlobal(query){
+  const cont = document.getElementById('resultadosBusquedaGlobal');
+  if(!cont) return;
+  if(!query || !query.trim()){ cont.innerHTML = ''; return; }
+  const resultados = buscarEnLaApp(query);
+  if(!resultados.length){
+    cont.innerHTML = `<p class="empty-note" style="margin-top:10px;">No encontré nada dentro de la app para "${escapeAttr(query)}". Prueba "🌐 Buscar en internet".</p>`;
+    return;
+  }
+  cont.innerHTML = `
+    <div class="table-scroll" style="margin-top:10px;">
+      <table class="ledger">
+        <thead><tr><th>Tipo</th><th>Resultado</th><th></th></tr></thead>
+        <tbody>
+          ${resultados.map((r, i) => `
+            <tr><td>${escapeAttr(r.tipo)}</td><td>${escapeAttr(r.texto)}</td><td><button class="btn btn-sm" data-idx="${i}">Ir</button></td></tr>
+          `).join('')}
+        </tbody>
+      </table>
+    </div>
+  `;
+  cont.querySelectorAll('[data-idx]').forEach(btn => {
+    btn.addEventListener('click', (e) => resultados[parseInt(e.target.dataset.idx, 10)].ir());
+  });
 }
 
 const QUICK_LINKS = [
   { id: 'terceros', label: 'Terceros', icon: '👥' },
   { id: 'puc', label: 'Plan de cuentas', icon: '📚' },
   { id: 'asientos', label: 'Comprobantes', icon: '🧾' },
+  { id: 'facturacion', label: 'Facturas / Cotizaciones', icon: '🧮' },
   { id: 'mayor', label: 'Balance de comprobación', icon: '📊' },
   { id: 'auxiliar', label: 'Libro auxiliar', icon: '📒' },
   { id: 'esf', label: 'Situación financiera', icon: '🏦' },
@@ -2557,6 +2702,20 @@ function renderConfig(){
       </div>
     </div>
     <div class="card">
+      <h3>Cambiar mi contraseña</h3>
+      <p class="empty-note">Cambia la contraseña de tu propio usuario (${escapeAttr(currentUser.username)}), sin necesitar al administrador.</p>
+      <div class="form-grid">
+        <div class="field"><label>Contraseña actual</label><input type="password" id="cambiarPassActual"></div>
+        <div class="field"></div>
+        <div class="field"><label>Contraseña nueva</label><input type="password" id="cambiarPassNueva"></div>
+        <div class="field"><label>Confirmar contraseña nueva</label><input type="password" id="cambiarPassConfirmar"></div>
+      </div>
+      <div class="btn-row" style="margin-top:10px;">
+        <button class="btn btn-primary" id="btnCambiarPass">Cambiar contraseña</button>
+      </div>
+      <div id="cambiarPassStatus" class="empty-note" style="margin-top:8px;"></div>
+    </div>
+    <div class="card">
       <h3>Sesión</h3>
       <p class="empty-note">Usuario actual: <strong>${escapeAttr(currentUser.username)}</strong> · Rol: <strong>${escapeAttr(ROLE_LABELS[currentUser.role])}</strong></p>
       <div class="btn-row">
@@ -2632,6 +2791,30 @@ function renderConfig(){
   document.getElementById('btnConfigLogout').addEventListener('click', () => {
     if(!confirm('¿Cerrar esta empresa y volver a la pantalla de acceso?')) return;
     logout();
+  });
+  document.getElementById('btnCambiarPass').addEventListener('click', async () => {
+    const status = document.getElementById('cambiarPassStatus');
+    const actual = document.getElementById('cambiarPassActual').value;
+    const nueva = document.getElementById('cambiarPassNueva').value;
+    const confirmar = document.getElementById('cambiarPassConfirmar').value;
+    const miUsuario = state.users.find(u => u.username.toLowerCase() === currentUser.username.toLowerCase());
+    if(!miUsuario){ status.innerHTML = '<span style="color:var(--bad);">No se encontró tu usuario en esta empresa (puede ser el usuario temporal de administrador original).</span>'; return; }
+    const hashActual = await sha256(actual);
+    if(hashActual !== miUsuario.passwordHash){ status.innerHTML = '<span style="color:var(--bad);">La contraseña actual no es correcta.</span>'; return; }
+    if(nueva.length < 4){ status.innerHTML = '<span style="color:var(--bad);">La contraseña nueva debe tener al menos 4 caracteres.</span>'; return; }
+    if(nueva !== confirmar){ status.innerHTML = '<span style="color:var(--bad);">Las contraseñas nuevas no coinciden.</span>'; return; }
+    const nuevoHash = await sha256(nueva);
+    miUsuario.passwordHash = nuevoHash;
+    const idx = loadUserIndex();
+    const entry = idx.find(u => u.username.toLowerCase() === currentUser.username.toLowerCase() && u.companyId === activeCompanyId);
+    if(entry) entry.passwordHash = nuevoHash;
+    saveUserIndex(idx);
+    logAudit('Contraseña propia cambiada', currentUser.username);
+    scheduleSave();
+    document.getElementById('cambiarPassActual').value = '';
+    document.getElementById('cambiarPassNueva').value = '';
+    document.getElementById('cambiarPassConfirmar').value = '';
+    status.innerHTML = '<span style="color:var(--good);">✓ Contraseña cambiada correctamente.</span>';
   });
 }
 SECTION_RENDERERS.config = renderConfig;
@@ -5118,6 +5301,205 @@ function renderERBody(){
     </div>
     ${erComp ? `<div class="card"><h3>Comparativo — ${fmtDate(compRango.desde)} a ${fmtDate(compRango.hasta)}</h3><table class="ledger"><thead><tr><th>Indicador</th><th class="num">Periodo actual</th><th class="num">Periodo comparativo</th><th class="num">Variación</th></tr></thead><tbody><tr><td>TOTAL INGRESOS</td><td class="num">${fmtMoney(er.totalIngresos)}</td><td class="num">${fmtMoney(erComp.totalIngresos)}</td><td class="num">${fmtMoney(er.totalIngresos-erComp.totalIngresos)}</td></tr><tr><td>UTILIDAD OPERACIONAL</td><td class="num">${fmtMoney(er.utilidadOperacional)}</td><td class="num">${fmtMoney(erComp.utilidadOperacional)}</td><td class="num">${fmtMoney(er.utilidadOperacional-erComp.utilidadOperacional)}</td></tr><tr><td>UTILIDAD NETA</td><td class="num">${fmtMoney(er.utilidadNeta)}</td><td class="num">${fmtMoney(erComp.utilidadNeta)}</td><td class="num">${fmtMoney(er.utilidadNeta-erComp.utilidadNeta)}</td></tr></tbody></table></div>` : ''}
   `;
+}
+
+/* ---------------------------------------------------------
+   SECCIÓN: FACTURACIÓN / COTIZACIONES (documentos comerciales imprimibles)
+--------------------------------------------------------- */
+let facturaEnCurso = null;
+
+function nuevoItemFactura(){ return { id: uid(), descripcion: '', cantidad: 1, precioUnitario: 0 }; }
+
+function totalFactura(doc){
+  return (doc.items || []).reduce((s, it) => s + (Number(it.cantidad) || 0) * (Number(it.precioUnitario) || 0), 0);
+}
+
+function renderFacturacion(){
+  const el = document.getElementById('section-facturacion');
+  el.innerHTML = `
+    <div class="section-head">
+      <h1>Facturas / Cotizaciones</h1>
+      <p>Documentos comerciales imprimibles para tus clientes. <strong>No son factura electrónica DIAN</strong> — son un documento de venta o cotización de uso interno/comercial.</p>
+    </div>
+    <div class="toolbar">
+      <button class="btn btn-primary" id="btnNuevaFactura">+ Nueva factura</button>
+      <button class="btn" id="btnNuevaCotizacion">+ Nueva cotización</button>
+    </div>
+    <div class="card" id="facturaEnCursoCard" hidden></div>
+    <div class="card">
+      <h3>Documentos generados</h3>
+      <div class="table-scroll">
+        <table class="ledger">
+          <thead><tr><th>Tipo</th><th>N°</th><th>Fecha</th><th>Cliente</th><th class="num">Total</th><th></th></tr></thead>
+          <tbody id="facturacionBody"></tbody>
+        </table>
+      </div>
+    </div>
+  `;
+  document.getElementById('btnNuevaFactura').addEventListener('click', () => iniciarDocumentoComercial('factura'));
+  document.getElementById('btnNuevaCotizacion').addEventListener('click', () => iniciarDocumentoComercial('cotizacion'));
+  guardButton('btnNuevaFactura', 'asientos');
+  guardButton('btnNuevaCotizacion', 'asientos');
+  if(facturaEnCurso) renderFacturaEnCurso();
+  renderFacturacionBody();
+}
+SECTION_RENDERERS.facturacion = renderFacturacion;
+
+function siguienteNumeroFactura(tipo){
+  const usados = state.documentosComerciales.filter(d => d.tipo === tipo).map(d => Number(d.numero) || 0);
+  return (usados.length ? Math.max(...usados) : 0) + 1;
+}
+
+function iniciarDocumentoComercial(tipo){
+  facturaEnCurso = {
+    tipo, numero: siguienteNumeroFactura(tipo), fecha: todayISO(), nit: '', notas: '',
+    items: [nuevoItemFactura()],
+  };
+  renderFacturaEnCurso();
+}
+
+function renderFacturaEnCurso(){
+  const card = document.getElementById('facturaEnCursoCard');
+  if(!facturaEnCurso){ card.hidden = true; return; }
+  card.hidden = false;
+  const total = totalFactura(facturaEnCurso);
+  card.innerHTML = `
+    <h3>${facturaEnCurso.tipo === 'factura' ? 'Nueva factura' : 'Nueva cotización'} N° ${facturaEnCurso.numero}</h3>
+    <div class="form-grid">
+      <div class="field"><label>Fecha</label><input type="date" id="facFecha" value="${escapeAttr(facturaEnCurso.fecha)}"></div>
+      <div class="field"><label>Cliente (NIT)</label><input id="facNit" list="tercerosDatalistFac" value="${escapeAttr(facturaEnCurso.nit)}"></div>
+    </div>
+    <datalist id="tercerosDatalistFac">${state.terceros.map(t => `<option value="${escapeAttr(t.nit)}">${escapeAttr(t.nit)} — ${escapeAttr(t.nombre)}</option>`).join('')}</datalist>
+    <p class="empty-note" style="margin-top:4px;">${escapeAttr(getTerceroNombre(facturaEnCurso.nit))}</p>
+
+    <div class="table-scroll" style="margin-top:12px;">
+      <table class="ledger">
+        <thead><tr><th>Descripción</th><th class="num">Cantidad</th><th class="num">Precio unitario</th><th class="num">Subtotal</th><th></th></tr></thead>
+        <tbody id="facItemsBody"></tbody>
+      </table>
+    </div>
+    <div class="btn-row" style="margin-top:8px;">
+      <button class="btn btn-sm" id="btnAddItemFactura">+ Agregar línea</button>
+    </div>
+    <p style="text-align:right; font-weight:700; margin-top:10px;">Total: ${fmtMoney(total)}</p>
+    <div class="field"><label>Notas</label><textarea id="facNotas" rows="2">${escapeAttr(facturaEnCurso.notas)}</textarea></div>
+    <div class="btn-row" style="margin-top:12px;">
+      <button class="btn btn-primary" id="btnGuardarFactura">Guardar</button>
+      <button class="btn" id="btnCancelarFactura">Cancelar</button>
+    </div>
+  `;
+  document.getElementById('facFecha').addEventListener('input', e => { facturaEnCurso.fecha = e.target.value; });
+  document.getElementById('facNit').addEventListener('input', e => { facturaEnCurso.nit = e.target.value; renderFacturaEnCurso(); });
+  document.getElementById('facNotas').addEventListener('input', e => { facturaEnCurso.notas = e.target.value; });
+  document.getElementById('btnAddItemFactura').addEventListener('click', () => { facturaEnCurso.items.push(nuevoItemFactura()); renderFacItemsBody(); });
+  document.getElementById('btnGuardarFactura').addEventListener('click', guardarDocumentoComercial);
+  document.getElementById('btnCancelarFactura').addEventListener('click', () => { facturaEnCurso = null; card.hidden = true; });
+  renderFacItemsBody();
+}
+
+function renderFacItemsBody(){
+  const body = document.getElementById('facItemsBody');
+  if(!body) return;
+  body.innerHTML = facturaEnCurso.items.map((it, i) => `
+    <tr data-idx="${i}">
+      <td><input data-f="descripcion" value="${escapeAttr(it.descripcion)}"></td>
+      <td style="width:90px;"><input type="number" class="num-input" data-f="cantidad" value="${it.cantidad}"></td>
+      <td style="width:130px;"><input type="number" class="num-input" data-f="precioUnitario" value="${it.precioUnitario}"></td>
+      <td class="num">${fmtMoney((Number(it.cantidad)||0) * (Number(it.precioUnitario)||0))}</td>
+      <td><button class="row-del" data-action="del">×</button></td>
+    </tr>
+  `).join('');
+  body.querySelectorAll('[data-f]').forEach(input => {
+    input.addEventListener('input', e => {
+      const idx = parseInt(e.target.closest('tr').dataset.idx, 10);
+      const f = e.target.dataset.f;
+      facturaEnCurso.items[idx][f] = (f === 'descripcion') ? e.target.value : (parseFloat(e.target.value) || 0);
+      const total = totalFactura(facturaEnCurso);
+      card_actualizarTotal(total);
+      renderFacItemsBody();
+    });
+  });
+  body.querySelectorAll('[data-action="del"]').forEach(btn => {
+    btn.addEventListener('click', e => {
+      const idx = parseInt(e.target.closest('tr').dataset.idx, 10);
+      facturaEnCurso.items.splice(idx, 1);
+      renderFacItemsBody();
+    });
+  });
+}
+function card_actualizarTotal(){ /* el total se recalcula en el próximo render completo */ }
+
+function guardarDocumentoComercial(){
+  if(!facturaEnCurso.nit){ alert('Elige un cliente (NIT).'); return; }
+  if(!facturaEnCurso.items.length || facturaEnCurso.items.every(it => !it.descripcion)){ alert('Agrega al menos una línea con descripción.'); return; }
+  state.documentosComerciales.push({ id: uid(), ...facturaEnCurso });
+  logAudit(facturaEnCurso.tipo === 'factura' ? 'Factura creada' : 'Cotización creada', `N° ${facturaEnCurso.numero} · ${getTerceroNombre(facturaEnCurso.nit)}`);
+  scheduleSave();
+  facturaEnCurso = null;
+  document.getElementById('facturaEnCursoCard').hidden = true;
+  renderFacturacionBody();
+}
+
+function renderFacturacionBody(){
+  const body = document.getElementById('facturacionBody');
+  if(!body) return;
+  const docs = [...state.documentosComerciales].sort((a,b) => (b.fecha||'').localeCompare(a.fecha||''));
+  if(!docs.length){
+    body.innerHTML = '<tr><td colspan="6" class="empty-note">Todavía no has generado ninguna factura o cotización.</td></tr>';
+    return;
+  }
+  body.innerHTML = docs.map(d => `
+    <tr data-id="${d.id}">
+      <td>${d.tipo === 'factura' ? 'Factura' : 'Cotización'}</td>
+      <td class="code">${d.numero}</td>
+      <td>${fmtDate(d.fecha)}</td>
+      <td>${escapeAttr(getTerceroNombre(d.nit) || d.nit)}</td>
+      <td class="num">${fmtMoney(totalFactura(d))}</td>
+      <td>
+        <button class="btn btn-sm" data-action="imprimir">🖨️ Ver / imprimir</button>
+        <button class="row-del" data-action="del">×</button>
+      </td>
+    </tr>
+  `).join('');
+  body.querySelectorAll('[data-action="imprimir"]').forEach(btn => {
+    btn.addEventListener('click', e => {
+      const id = e.target.closest('tr').dataset.id;
+      const d = state.documentosComerciales.find(x => x.id === id);
+      if(d) imprimirDocumentoComercial(d);
+    });
+  });
+  body.querySelectorAll('[data-action="del"]').forEach(btn => {
+    btn.addEventListener('click', e => {
+      const id = e.target.closest('tr').dataset.id;
+      if(!confirm('¿Eliminar este documento?')) return;
+      state.documentosComerciales = state.documentosComerciales.filter(x => x.id !== id);
+      scheduleSave();
+      renderFacturacionBody();
+    });
+  });
+}
+
+function imprimirDocumentoComercial(d){
+  const total = totalFactura(d);
+  const filas = d.items.map(it => `
+    <tr>
+      <td>${escapeAttr(it.descripcion)}</td>
+      <td class="num">${it.cantidad}</td>
+      <td class="num">${fmtMoney(it.precioUnitario)}</td>
+      <td class="num">${fmtMoney((Number(it.cantidad)||0) * (Number(it.precioUnitario)||0))}</td>
+    </tr>
+  `).join('');
+  const html = `
+    <p><strong>${d.tipo === 'factura' ? 'FACTURA DE VENTA (no electrónica DIAN)' : 'COTIZACIÓN'}</strong> N° ${d.numero} — Fecha: ${fmtDate(d.fecha)}</p>
+    <p>Cliente: ${escapeAttr(getTerceroNombre(d.nit) || d.nit)} (NIT ${escapeAttr(d.nit)})</p>
+    <table class="ledger">
+      <thead><tr><th>Descripción</th><th class="num">Cantidad</th><th class="num">Precio unitario</th><th class="num">Subtotal</th></tr></thead>
+      <tbody>${filas}</tbody>
+      <tfoot><tr><td colspan="3">TOTAL</td><td class="num">${fmtMoney(total)}</td></tr></tfoot>
+    </table>
+    ${d.notas ? `<p style="margin-top:10px;"><strong>Notas:</strong> ${escapeAttr(d.notas)}</p>` : ''}
+  `;
+  printReport(d.tipo === 'factura' ? 'Factura de Venta' : 'Cotización', html);
 }
 
 /* ---------------------------------------------------------
