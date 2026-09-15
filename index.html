@@ -185,6 +185,21 @@
   .tag-cliente{ background: rgba(47,104,69,0.12); color: var(--good); }
   .tag-ambos{ background: rgba(122,46,61,0.12); color: var(--accent); }
 
+  .pwd-field-wrap{ position: relative; display: flex; align-items: center; }
+  .pwd-field-wrap input{ flex: 1; padding-right: 38px !important; }
+  .pwd-eye-btn{
+    position: absolute;
+    right: 6px;
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-size: 1rem;
+    padding: 4px 6px;
+    color: var(--ink-soft);
+    line-height: 1;
+  }
+  .pwd-eye-btn:hover{ color: var(--accent); }
+
   .accent-swatch{
     width: 32px; height: 32px;
     border-radius: 50%;
@@ -768,6 +783,30 @@ function todayStamp(){
 
 function escapeAttr(s){
   return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;');
+}
+
+// Envuelve un <input type="password"> ya existente en el DOM con un botón de ojito
+// para mostrar/ocultar el texto mientras se escribe. Seguro de llamar varias veces.
+function agregarBotonVerContrasena(inputId){
+  const input = document.getElementById(inputId);
+  if(!input || input.dataset.eyeAttached === 'true') return;
+  input.dataset.eyeAttached = 'true';
+  const wrap = document.createElement('div');
+  wrap.className = 'pwd-field-wrap';
+  input.parentNode.insertBefore(wrap, input);
+  wrap.appendChild(input);
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'pwd-eye-btn';
+  btn.title = 'Ver/ocultar contraseña';
+  btn.textContent = '👁️';
+  wrap.appendChild(btn);
+  btn.addEventListener('click', () => {
+    const showing = input.type === 'text';
+    input.type = showing ? 'password' : 'text';
+    btn.textContent = showing ? '👁️' : '🙈';
+    input.focus();
+  });
 }
 
 function downloadBlob(blob, filename){
@@ -2583,21 +2622,54 @@ function renderUsuarios(){
         </table>
       </div>
     </div>
+
+    <div class="modal-overlay" id="usuarioModalOverlay" hidden>
+      <div class="modal-card">
+        <div class="modal-head">
+          <h3>Agregar usuario</h3>
+          <button class="modal-x" id="usuarioModalClose">×</button>
+        </div>
+        <div class="form-grid">
+          <div class="field" style="grid-column:1/-1"><label>Nombre de usuario *</label><input id="ufUsername"></div>
+          <div class="field" style="grid-column:1/-1"><label>Contraseña * (mínimo 4 caracteres)</label><input type="password" id="ufPassword"></div>
+          <div class="field" style="grid-column:1/-1">
+            <label>Rol *</label>
+            <select id="ufRole">${ROLES.map(r => `<option value="${r}">${ROLE_LABELS[r]}</option>`).join('')}</select>
+          </div>
+        </div>
+        <p class="gate-error" id="usuarioModalError"></p>
+        <div class="btn-row" style="margin-top:14px;">
+          <button class="btn btn-primary" id="usuarioModalSave">Guardar</button>
+          <button class="btn" id="usuarioModalCancel">Cancelar</button>
+        </div>
+      </div>
+    </div>
   `;
-  document.getElementById('btnAddUsuario').addEventListener('click', async () => {
-    const username = prompt('Nombre de usuario nuevo:');
-    if(!username || !username.trim()) return;
+  document.getElementById('btnAddUsuario').addEventListener('click', () => {
+    document.getElementById('ufUsername').value = '';
+    document.getElementById('ufPassword').value = '';
+    document.getElementById('ufRole').value = 'contador';
+    document.getElementById('usuarioModalError').textContent = '';
+    document.getElementById('usuarioModalOverlay').hidden = false;
+    agregarBotonVerContrasena('ufPassword');
+  });
+  document.getElementById('usuarioModalClose').addEventListener('click', () => { document.getElementById('usuarioModalOverlay').hidden = true; });
+  document.getElementById('usuarioModalCancel').addEventListener('click', () => { document.getElementById('usuarioModalOverlay').hidden = true; });
+  document.getElementById('usuarioModalSave').addEventListener('click', async () => {
+    const username = document.getElementById('ufUsername').value.trim();
+    const password = document.getElementById('ufPassword').value;
+    const role = document.getElementById('ufRole').value;
+    const errorEl = document.getElementById('usuarioModalError');
+    if(!username){ errorEl.textContent = 'Escribe un nombre de usuario.'; return; }
     const idx = loadUserIndex();
-    if(idx.some(u => u.username.toLowerCase() === username.trim().toLowerCase())){ alert('Ese usuario ya existe en alguna empresa.'); return; }
-    const password = prompt('Contraseña (mínimo 4 caracteres):');
-    if(!password || password.length < 4){ alert('Contraseña inválida.'); return; }
-    const role = prompt(`Rol (elige uno): ${ROLES.join(' / ')}`, 'contador');
-    if(!ROLES.includes(role)){ alert('Rol no válido.'); return; }
+    if(idx.some(u => u.username.toLowerCase() === username.toLowerCase())){ errorEl.textContent = 'Ese usuario ya existe en alguna empresa.'; return; }
+    if(!password || password.length < 4){ errorEl.textContent = 'La contraseña debe tener al menos 4 caracteres.'; return; }
     const passwordHash = await sha256(password);
-    state.users.push({ id: uid(), username: username.trim(), passwordHash, role });
-    addUserToIndex(username.trim(), activeCompanyId, passwordHash, role);
-    logAudit('Usuario creado', `${username.trim()} · ${ROLE_LABELS[role]}`);
+    state.users.push({ id: uid(), username, passwordHash, role });
+    addUserToIndex(username, activeCompanyId, passwordHash, role);
+    logAudit('Usuario creado', `${username} · ${ROLE_LABELS[role]}`);
     scheduleSave();
+    document.getElementById('usuarioModalOverlay').hidden = true;
     renderUsuariosBody();
   });
   renderUsuariosBody();
@@ -2792,6 +2864,9 @@ function renderConfig(){
     if(!confirm('¿Cerrar esta empresa y volver a la pantalla de acceso?')) return;
     logout();
   });
+  agregarBotonVerContrasena('cambiarPassActual');
+  agregarBotonVerContrasena('cambiarPassNueva');
+  agregarBotonVerContrasena('cambiarPassConfirmar');
   document.getElementById('btnCambiarPass').addEventListener('click', async () => {
     const status = document.getElementById('cambiarPassStatus');
     const actual = document.getElementById('cambiarPassActual').value;
@@ -6122,6 +6197,9 @@ document.getElementById('btnLogout').addEventListener('click', () => {
   await migrateOldCompanies();
   renderGateCompaniesHint();
   showGateStep('gateChoice');
+  agregarBotonVerContrasena('gateLoginPass');
+  agregarBotonVerContrasena('gateCreatePass');
+  agregarBotonVerContrasena('gateCreatePass2');
 })();
 
 /* ---------------------------------------------------------
